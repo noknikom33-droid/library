@@ -1777,12 +1777,22 @@ var SLS_CONFIG = {
     }).catch(function (e) { toast(e.message, 'error'); });
   }
 
+  // สร้าง URL รูป QR จาก API (ไม่ต้องพึ่ง JS library — แสดงได้เสมอ)
+  function qrImageUrl(data, size) {
+    return 'https://api.qrserver.com/v1/create-qr-code/?size=' + size + 'x' + size
+      + '&margin=10&color=1e293b&bgcolor=ffffff&data=' + encodeURIComponent(data);
+  }
+
   function openBookQrModal(b) {
+    var qrData = 'SLS:BK:' + b.code;
+    var imgUrl = qrImageUrl(qrData, 480);
     Modal.open({
       title: 'QR Code · ' + b.title,
       titleIcon: 'bi-qr-code',
       html: '<div class="qr-box">'
-        + '<div id="qr-canvas" class="qr-canvas"></div>'
+        + '<div id="qr-canvas" class="qr-canvas" style="min-height:240px;display:flex;align-items:center;justify-content:center">'
+        +   '<div class="sk sk-block" style="width:240px;height:240px;border-radius:12px" id="qr-loading"></div>'
+        + '</div>'
         + '<div class="qr-code-text">' + esc(b.code) + '</div>'
         + '<div class="text-xs muted text-center">สแกน QR เพื่อยืม-คืนหนังสือเล่มนี้</div>'
         + '<div class="flex gap-2 mt-3" style="flex-wrap:wrap;justify-content:center">'
@@ -1792,20 +1802,21 @@ var SLS_CONFIG = {
         + '</div>',
       footer: '<button class="btn" data-modal-close type="button">ปิด</button>',
       onOpen: function (host) {
-        loadQRLib().then(function (QRC) {
-          var c = document.createElement('canvas');
-          QRC.toCanvas(c, 'SLS:BK:' + b.code, { width: 240, margin: 1, errorCorrectionLevel: 'M', color: { dark: '#1e293b', light: '#ffffff' } }, function (err) {
-            if (err) { $('#qr-canvas', host).innerHTML = '<div class="empty-state">สร้าง QR ไม่สำเร็จ</div>'; return; }
-            $('#qr-canvas', host).innerHTML = '';
-            $('#qr-canvas', host).appendChild(c);
-            $('#qr-download', host).addEventListener('click', function () {
+        var box = $('#qr-canvas', host);
+
+        function wireButtons(getPngUrl) {
+          $('#qr-download', host).onclick = function () {
+            getPngUrl(function (url) {
+              if (!url) { window.open(imgUrl, '_blank'); return; }
               var link = document.createElement('a');
               link.download = 'QR-' + b.code + '.png';
-              link.href = c.toDataURL('image/png');
+              link.href = url;
               link.click();
             });
-            $('#qr-print', host).addEventListener('click', function () {
-              var dataUrl = c.toDataURL('image/png');
+          };
+          $('#qr-print', host).onclick = function () {
+            getPngUrl(function (url) {
+              var src = url || imgUrl;
               var w = window.open('', '_blank', 'width=400,height=540');
               if (!w) { toast('โปรดอนุญาต popup', 'warning'); return; }
               w.document.write('<!DOCTYPE html><html><head><title>QR ' + esc(b.code) + '</title>'
@@ -1813,17 +1824,49 @@ var SLS_CONFIG = {
                 + 'img{max-width:280px;margin:14px 0}h2{font-size:16px;margin:4px 0}p{margin:2px;font-size:12px;color:#475569}.c{font-family:monospace;font-size:18px;font-weight:700;color:#6366f1}</style></head><body>'
                 + '<h2>' + esc(b.title) + '</h2>'
                 + '<p>' + esc(b.author) + '</p>'
-                + '<img src="' + dataUrl + '">'
+                + '<img src="' + src + '" onload="setTimeout(function(){window.print()},250)">'
                 + '<div class="c">' + esc(b.code) + '</div>'
                 + '<p>' + esc((Store.boot.app && Store.boot.app.name) || '') + '</p>'
-                + '<sc' + 'ript>setTimeout(function(){window.print()},250);</sc' + 'ript>'
                 + '</body></html>');
               w.document.close();
             });
+          };
+        }
+
+        // ── แผน A: รูปจาก QR API ──
+        var img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = function () {
+          box.innerHTML = '';
+          img.style.width = '240px';
+          img.style.height = '240px';
+          img.style.borderRadius = '10px';
+          box.appendChild(img);
+          wireButtons(function (cb) {
+            try {
+              var c = document.createElement('canvas');
+              c.width = img.naturalWidth; c.height = img.naturalHeight;
+              c.getContext('2d').drawImage(img, 0, 0);
+              cb(c.toDataURL('image/png'));
+            } catch (e) { cb(null); }
           });
-        }).catch(function () {
-          $('#qr-canvas', host).innerHTML = '<div class="text-center" style="padding:20px"><div class="text-xs muted">โหลด QR library ไม่สำเร็จ ใช้ code ด้านล่างแทน</div></div>';
-        });
+        };
+        img.onerror = function () {
+          // ── แผน B: JS library (CDN) ──
+          loadQRLib().then(function (QRC) {
+            var c = document.createElement('canvas');
+            QRC.toCanvas(c, qrData, { width: 240, margin: 1, errorCorrectionLevel: 'M', color: { dark: '#1e293b', light: '#ffffff' } }, function (err) {
+              if (err) { box.innerHTML = '<div class="empty-state">สร้าง QR ไม่สำเร็จ — ใช้รหัสด้านล่างแทน</div>'; return; }
+              box.innerHTML = '';
+              box.appendChild(c);
+              wireButtons(function (cb) { try { cb(c.toDataURL('image/png')); } catch (e) { cb(null); } });
+            });
+          }).catch(function () {
+            box.innerHTML = '<div class="text-center" style="padding:20px"><i class="bi bi-wifi-off" style="font-size:32px;color:#f43f5e"></i><div class="text-xs muted mt-2">สร้าง QR ไม่ได้ (อินเทอร์เน็ตถูกจำกัด)<br>ใช้รหัสหนังสือด้านล่างกรอกแทนได้</div></div>';
+            wireButtons(function (cb) { cb(null); });
+          });
+        };
+        img.src = imgUrl;
       }
     });
   }
