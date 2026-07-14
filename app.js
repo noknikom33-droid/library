@@ -4059,6 +4059,29 @@ var SLS_CONFIG = {
       o.start(); o.stop(ctx.currentTime + 0.2);
     } catch (e) {}
   }
+  // เสียงพูดภาษาไทย (Web Speech API)
+  function speak(text) {
+    try {
+      if (!('speechSynthesis' in window) || !text) return;
+      var u = new SpeechSynthesisUtterance(String(text));
+      u.lang = 'th-TH';
+      u.rate = 1;
+      u.pitch = 1;
+      var vs = window.speechSynthesis.getVoices() || [];
+      for (var i = 0; i < vs.length; i++) {
+        if ((vs[i].lang || '').toLowerCase().indexOf('th') === 0) { u.voice = vs[i]; break; }
+      }
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(u);
+    } catch (e) {}
+  }
+  // โหลดรายชื่อเสียงล่วงหน้า (บางเบราว์เซอร์โหลดแบบ async)
+  try {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.getVoices();
+      window.speechSynthesis.onvoiceschanged = function () {};
+    }
+  } catch (e) {}
 
   // ── ตัวสแกนกล้อง (โหลด html5-qrcode แบบ lazy) ──
   var __SCN = null, __SCNP = null;
@@ -4183,12 +4206,15 @@ var SLS_CONFIG = {
     window.call('checkin.create', { code: code }).then(function (r) {
       Spinner.hide();
       beep(r.already ? 'dup' : 'success');
+      var _u = r.user || {};
+      speak(r.already ? 'เช็คชื่อไปแล้วครับ' : 'ยินดีต้อนรับ ' + (_u.full_name || ''));
       renderCheckinResult($('#ci-result'), r);
       loadToday();
       var input = $('#ci-code'); if (input) try { input.focus(); } catch (e) {}
     }).catch(function (e) {
       Spinner.hide();
       beep('error');
+      speak('ไม่พบข้อมูลสมาชิก');
       var box = $('#ci-result');
       if (box) box.innerHTML = '<div style="margin-top:12px;padding:16px;background:linear-gradient(135deg,#fef2f2,#fff);border:1px solid #fecaca;border-radius:14px;display:flex;gap:12px;align-items:center">'
         + '<i class="bi bi-x-circle-fill" style="font-size:32px;color:#ef4444"></i>'
@@ -4306,6 +4332,7 @@ var SLS_CONFIG = {
         busy = false;
         var u = r.user || {};
         beep(r.already ? 'dup' : 'success');
+        speak(r.already ? 'เช็คชื่อไปแล้วครับ' : 'ยินดีต้อนรับ ' + (u.full_name || ''));
         if (r.already) {
           showResult('<div style="padding:18px;background:rgba(245,158,11,.15);border:1px solid rgba(245,158,11,.4);border-radius:16px">'
             + '<div style="font-size:20px;font-weight:800;color:#fcd34d"><i class="bi bi-info-circle-fill"></i> เช็คชื่อไปแล้ว</div>'
@@ -4320,6 +4347,7 @@ var SLS_CONFIG = {
       }).catch(function (e) {
         busy = false;
         beep('error');
+        speak('ไม่พบข้อมูลสมาชิก กรุณาลองใหม่');
         showResult('<div style="padding:18px;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.45);border-radius:16px">'
           + '<div style="font-size:18px;font-weight:800;color:#fca5a5"><i class="bi bi-x-circle-fill"></i> ' + esc(e.message) + '</div>'
           + '<div style="font-size:12px;color:rgba(241,245,249,.6);margin-top:4px">ลองใหม่ หรือติดต่อบรรณารักษ์</div></div>');
