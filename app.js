@@ -409,6 +409,7 @@ var SLS_CONFIG = {
           saveSession();
         }
         hideBootLoader();
+        if ((location.hash || '').indexOf('#/kiosk') === 0 && window.SLS_renderKiosk) { window.SLS_renderKiosk(); return; }
         if (Store.user) {
           if (!location.hash || location.hash === '#') {
             try { history.replaceState(null, '', location.pathname + location.search + '#/dashboard'); }
@@ -877,6 +878,7 @@ var SLS_CONFIG = {
   //  ROUTER
   // ═══════════════════════════════════════════════════════════
   function dispatch() {
+    if ((location.hash || '').indexOf('#/kiosk') === 0 && window.SLS_renderKiosk) { window.SLS_renderKiosk(); return; }
     if (!Store.token || !Store.user) {
       if (!$('#app-root') || !$('#app-root').querySelector('.login-stage')) renderLogin();
       return;
@@ -3428,7 +3430,8 @@ var SLS_CONFIG = {
     var toolbar = '<div class="toolbar">'
       + '<div class="search-box"><i class="bi bi-search"></i><input class="input" placeholder="ค้นหา ชื่อ, username, ห้อง" id="us-q" value="' + esc(USERS_STATE.q) + '"></div>'
       + '<div class="filters">' + roleChips + '</div>'
-      + (manage ? '<button class="btn btn-primary" id="us-new" style="margin-left:auto"><i class="bi bi-plus-lg"></i> เพิ่มผู้ใช้</button>' : '')
+      + (manage ? '<button class="btn" id="us-cards" style="margin-left:auto"><i class="bi bi-person-badge"></i> พิมพ์บัตร</button>' : '')
+      + (manage ? '<button class="btn btn-primary" id="us-new"><i class="bi bi-plus-lg"></i> เพิ่มผู้ใช้</button>' : '')
       + '</div>';
     H.pageWrap(hero + toolbar + '<div id="us-list">' + H.skBlock(80) + H.skBlock(80) + '</div>');
     var dbn = null;
@@ -3439,6 +3442,7 @@ var SLS_CONFIG = {
       c.addEventListener('click', function () { USERS_STATE.role = c.getAttribute('data-role') || ''; Routes['#/users'](); });
     });
     if (manage) $('#us-new').addEventListener('click', function () { openUserEditModal(null); });
+    if (manage) { var _uc = $('#us-cards'); if (_uc) _uc.addEventListener('click', function () { if (window.SLS_openCardSheet) window.SLS_openCardSheet(); }); }
     loadUsers();
   };
 
@@ -3463,13 +3467,19 @@ var SLS_CONFIG = {
             + '<td><div class="text-sm">' + esc(u.class_name || '-') + '</div>' + (u.student_no ? '<div class="text-xs muted">' + esc(u.student_no) + '</div>' : '') + '</td>'
             + '<td><div class="text-xs">' + esc(u.email || '-') + '</div><div class="text-xs muted">' + esc(u.phone || '') + '</div></td>'
             + '<td>' + (u.is_active ? '<span class="badge b-paid">เปิดใช้</span>' : '<span class="badge b-unpaid">ปิดใช้</span>') + '</td>'
-            + (manage ? '<td><div class="flex gap-2"><button class="btn btn-sm" data-uedit="' + esc(u.id) + '"><i class="bi bi-pencil"></i></button><button class="btn btn-sm btn-danger" data-udel="' + esc(u.id) + '"><i class="bi bi-trash"></i></button></div></td>' : '')
+            + (manage ? '<td><div class="flex gap-2"><button class="btn btn-sm" data-ucard="' + esc(u.id) + '" title="บัตรห้องสมุด"><i class="bi bi-person-badge"></i></button><button class="btn btn-sm" data-uedit="' + esc(u.id) + '"><i class="bi bi-pencil"></i></button><button class="btn btn-sm btn-danger" data-udel="' + esc(u.id) + '"><i class="bi bi-trash"></i></button></div></td>' : '')
             + '</tr>';
         }).join('') + '</tbody></table></div>';
       $$('[data-uedit]').forEach(function (b) {
         b.addEventListener('click', function () {
           var u = data.items.find(function (x) { return x.id === b.getAttribute('data-uedit'); });
           openUserEditModal(u);
+        });
+      });
+      $$('[data-ucard]').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var u = data.items.find(function (x) { return x.id === b.getAttribute('data-ucard'); });
+          if (window.SLS_openCardModal) window.SLS_openCardModal(u);
         });
       });
       $$('[data-udel]').forEach(function (b) {
@@ -4012,4 +4022,567 @@ var SLS_CONFIG = {
   if (Store.user && location.hash) {
     setTimeout(function () { window.SLS_dispatch && window.SLS_dispatch(); }, 30);
   }
+})();
+
+/* ═══════════════════════════════════════════════════════════════
+ *  SECTION 3: CHECK-IN (เช็คชื่อเข้าใช้) + LIBRARY CARDS (บัตรห้องสมุด)
+ *  เพิ่มใน v1.2 — ต้องใช้คู่กับ Code.gs v2.2 ขึ้นไป
+ * ═══════════════════════════════════════════════════════════════ */
+(function () {
+  'use strict';
+  var H = window.SLS;
+  var $ = H.$, $$ = H.$$, esc = H.esc;
+  var Store = H.Store;
+  var Routes = H.Routes;
+
+  // ── ลงทะเบียนเมนู + หัวเพจ ──
+  window.PAGE_META['#/checkin'] = { title: 'เช็คชื่อเข้าใช้', sub: 'บันทึกการเข้าใช้ห้องสมุด', icon: 'bi-person-check-fill' };
+  window.PAGE_META['#/kiosk']   = { title: 'เช็คชื่อ', sub: 'โหมดคีออส', icon: 'bi-person-check-fill' };
+  try {
+    window.MENU_GROUPS.forEach(function (g) {
+      if (g.title === 'งานหลัก') {
+        g.items.splice(1, 0, { hash: '#/checkin', icon: 'bi-person-check-fill', label: 'เช็คชื่อเข้าใช้', cap: 'checkin.manage|loan.manage' });
+      }
+    });
+  } catch (e) {}
+
+  function todayISO() { return TH.iso(new Date()); }
+  function beep(type) {
+    try {
+      var ctx = new (window.AudioContext || window.webkitAudioContext)();
+      var o = ctx.createOscillator(), g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.value = type === 'error' ? 200 : (type === 'dup' ? 500 : 880);
+      o.type = 'sine';
+      g.gain.setValueAtTime(0.15, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.2);
+      o.start(); o.stop(ctx.currentTime + 0.2);
+    } catch (e) {}
+  }
+
+  // ── ตัวสแกนกล้อง (โหลด html5-qrcode แบบ lazy) ──
+  var __SCN = null, __SCNP = null;
+  function loadScanner() {
+    if (typeof Html5Qrcode !== 'undefined') return Promise.resolve(Html5Qrcode);
+    if (__SCNP) return __SCNP;
+    var srcs = [
+      'https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js',
+      'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js',
+      'https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js'
+    ];
+    __SCNP = new Promise(function (resolve, reject) {
+      (function tryLoad(i) {
+        if (typeof Html5Qrcode !== 'undefined') return resolve(Html5Qrcode);
+        if (i >= srcs.length) { __SCNP = null; return reject(new Error('โหลดตัวสแกนไม่สำเร็จ')); }
+        var s = document.createElement('script');
+        s.src = srcs[i]; s.async = true;
+        s.onload = function () { typeof Html5Qrcode !== 'undefined' ? resolve(Html5Qrcode) : tryLoad(i + 1); };
+        s.onerror = function () { tryLoad(i + 1); };
+        document.head.appendChild(s);
+      })(0);
+    });
+    return __SCNP;
+  }
+  function openCam(onCode) {
+    var elemId = 'ci-qr-' + Date.now();
+    Modal.open({
+      title: '📷 สแกน QR บัตรสมาชิก', titleIcon: 'bi-qr-code-scan',
+      html: '<div id="' + elemId + '" style="width:100%;aspect-ratio:1;background:#0f172a;border-radius:14px;overflow:hidden;max-width:380px;margin:0 auto"></div>'
+        + '<div class="text-xs muted mt-2 text-center">หันกล้องไปที่ QR Code บนบัตร</div>',
+      footer: '<button class="btn" data-modal-close type="button">ปิด</button>',
+      onOpen: function (host) {
+        loadScanner().then(function (HQ) {
+          if (!document.getElementById(elemId)) return;
+          var qr = new HQ(elemId);
+          __SCN = qr;
+          qr.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 220, height: 220 } },
+            function (text) {
+              try { qr.stop().then(function () { qr.clear(); }).catch(function () {}); } catch (e) {}
+              __SCN = null;
+              Modal.close();
+              onCode(text);
+            }, function () {}
+          ).catch(function (e) {
+            var el = document.getElementById(elemId);
+            if (el) el.innerHTML = '<div style="color:#fca5a5;padding:36px;text-align:center"><i class="bi bi-camera-video-off" style="font-size:36px"></i><br>เปิดกล้องไม่ได้<br><span style="font-size:11px">' + esc(e.message || '') + '</span></div>';
+          });
+        }).catch(function () {
+          var el = document.getElementById(elemId);
+          if (el) el.innerHTML = '<div style="color:#fca5a5;padding:36px;text-align:center">โหลดตัวสแกนไม่สำเร็จ — พิมพ์รหัสแทนได้</div>';
+        });
+      }
+    });
+    var host = $('#modal-host');
+    var oc = host._cleanup;
+    host._cleanup = function () {
+      if (__SCN) { try { __SCN.stop().then(function () { __SCN.clear(); }).catch(function () {}); } catch (e) {} __SCN = null; }
+      if (oc) oc();
+    };
+  }
+
+  // ═════════════════════════════════════════════════════════
+  //  หน้าเช็คชื่อ (สำหรับบรรณารักษ์)
+  // ═════════════════════════════════════════════════════════
+  Routes['#/checkin'] = function () {
+    if (!H.hasCap('checkin.manage|loan.manage')) { toast('คุณไม่มีสิทธิ์', 'warning'); location.hash = '#/dashboard'; return; }
+    var hero = H.heroHtml({
+      icon: 'bi-person-check-fill', pill: 'เช็คชื่อเข้าใช้',
+      title: 'เช็คชื่อเข้าใช้ห้องสมุด',
+      sub: 'สแกนบัตรสมาชิก · พิมพ์เลขประจำตัว/username · ดูสถิติวันนี้',
+      grad: 'linear-gradient(135deg,#10b981 0%,#059669 55%,#14b8a6 100%)'
+    });
+    var scanBox = '<div class="sd-panel">'
+      + '<div class="bw-scan-row" style="display:grid;grid-template-columns:auto 1fr auto;gap:8px">'
+      +   '<button class="bw-scan-btn" id="ci-cam" type="button" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:0 14px;min-width:64px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;border:0;border-radius:14px;font-family:inherit;font-weight:700;font-size:11px;cursor:pointer"><i class="bi bi-qr-code-scan" style="font-size:22px"></i><span>สแกน</span></button>'
+      +   '<input class="input" id="ci-code" placeholder="เลขประจำตัว / username / สแกนบัตร แล้วกด Enter" autocomplete="off" style="height:56px;font-size:16px;font-weight:600">'
+      +   '<button class="btn btn-success" id="ci-go" style="min-width:64px;height:56px;font-size:20px"><i class="bi bi-check-lg"></i></button>'
+      + '</div>'
+      + '<div id="ci-result"></div>'
+      + '</div>';
+    var kioskBox = '<div class="sd-panel"><div class="sd-panel-title"><i class="bi bi-display"></i> โหมดคีออส (ให้นักเรียนเช็คชื่อเอง)</div>'
+      + '<div class="text-xs muted mb-2">เปิดลิงก์นี้ค้างไว้บนแท็บเล็ต/คอมหน้าห้องสมุด — ใช้เช็คชื่อได้อย่างเดียว ไม่ต้องล็อกอิน ทำอย่างอื่นไม่ได้</div>'
+      + '<div class="flex gap-2" style="flex-wrap:wrap"><input class="input" id="ci-kiosk-url" readonly value="กำลังโหลด..." style="flex:1;min-width:200px;font-size:12px">'
+      + '<button class="btn" id="ci-kiosk-copy"><i class="bi bi-clipboard"></i> คัดลอก</button>'
+      + '<button class="btn btn-primary" id="ci-kiosk-open"><i class="bi bi-box-arrow-up-right"></i> เปิด</button></div>'
+      + '</div>';
+    var statsBox = '<div id="ci-stats" class="sd-stagger"></div>';
+    var listBox = '<div class="sd-panel"><div class="sd-panel-title"><i class="bi bi-clock-history"></i> รายชื่อผู้เข้าใช้วันนี้ <span id="ci-count" class="badge b-active" style="margin-left:6px"></span></div><div id="ci-list">' + H.skBlock(80) + '</div></div>';
+
+    H.pageWrap(hero + scanBox + statsBox + '<div class="sd-grid-2">' + kioskBox + '</div>' + listBox);
+
+    var input = $('#ci-code');
+    function submit() {
+      var code = input.value.trim();
+      if (!code) return;
+      input.value = '';
+      doCheckin(code);
+    }
+    $('#ci-go').addEventListener('click', submit);
+    input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+    $('#ci-cam').addEventListener('click', function () { openCam(function (code) { input.value = code; submit(); }); });
+    setTimeout(function () { try { input.focus(); } catch (e) {} }, 150);
+
+    // ลิงก์คีออส
+    window.call('checkin.kiosk_info', {}).then(function (r) {
+      var url = location.origin + location.pathname + '#/kiosk?key=' + r.key;
+      var el = $('#ci-kiosk-url'); if (el) el.value = url;
+      var cp = $('#ci-kiosk-copy'); if (cp) cp.addEventListener('click', function () {
+        try { navigator.clipboard.writeText(url); toast('คัดลอกแล้ว', 'success'); }
+        catch (e) { el.select(); document.execCommand('copy'); toast('คัดลอกแล้ว', 'success'); }
+      });
+      var op = $('#ci-kiosk-open'); if (op) op.addEventListener('click', function () { window.open(url, '_blank'); });
+    }).catch(function (e) {
+      var el = $('#ci-kiosk-url'); if (el) el.value = 'โหลดไม่สำเร็จ: ' + e.message;
+    });
+
+    loadToday();
+  };
+
+  function doCheckin(code) {
+    Spinner.show('กำลังบันทึกการเข้าใช้');
+    window.call('checkin.create', { code: code }).then(function (r) {
+      Spinner.hide();
+      beep(r.already ? 'dup' : 'success');
+      renderCheckinResult($('#ci-result'), r);
+      loadToday();
+      var input = $('#ci-code'); if (input) try { input.focus(); } catch (e) {}
+    }).catch(function (e) {
+      Spinner.hide();
+      beep('error');
+      var box = $('#ci-result');
+      if (box) box.innerHTML = '<div style="margin-top:12px;padding:16px;background:linear-gradient(135deg,#fef2f2,#fff);border:1px solid #fecaca;border-radius:14px;display:flex;gap:12px;align-items:center">'
+        + '<i class="bi bi-x-circle-fill" style="font-size:32px;color:#ef4444"></i>'
+        + '<div><div class="font-bold" style="color:#991b1b">' + esc(e.message) + '</div><div class="text-xs muted">ตรวจสอบเลขประจำตัว/username แล้วลองใหม่</div></div></div>';
+    });
+  }
+
+  function renderCheckinResult(box, r) {
+    if (!box) return;
+    var u = r.user || {};
+    var isDup = !!r.already;
+    box.innerHTML = '<div style="margin-top:12px;padding:16px;background:linear-gradient(135deg,' + (isDup ? '#fffbeb,#fff' : '#f0fdf4,#fff') + ');border:1px solid ' + (isDup ? '#fcd34d' : '#86efac') + ';border-radius:14px;display:flex;gap:14px;align-items:center;animation:bwSlideIn .25s ease">'
+      + '<div style="width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:18px;flex-shrink:0;' + H.avatarStyle(u.avatar_url) + '">' + (u.avatar_url ? '' : esc(H.initials(u.full_name))) + '</div>'
+      + '<div style="flex:1;min-width:0">'
+      +   '<div class="font-bold" style="font-size:16px">' + esc(u.full_name || '-') + '</div>'
+      +   '<div class="text-xs muted">' + esc(u.class_name || H.roleLabel(u.role)) + (u.student_no ? ' · ' + esc(u.student_no) : '') + '</div>'
+      +   '<div class="text-xs mt-2" style="color:' + (isDup ? '#b45309' : '#047857') + ';font-weight:700">'
+      +     (isDup
+            ? '<i class="bi bi-info-circle-fill"></i> เช็คชื่อไปแล้วเมื่อ ' + esc(TH.time(r.checked_at))
+            : '<i class="bi bi-check-circle-fill"></i> เช็คชื่อสำเร็จ ' + esc(TH.time(r.checked_at)) + ' · คนที่ ' + (r.today_count || 1) + ' ของวันนี้')
+      +   '</div>'
+      + '</div>'
+      + '<i class="bi bi-' + (isDup ? 'exclamation-circle-fill' : 'check-circle-fill') + '" style="font-size:36px;color:' + (isDup ? '#f59e0b' : '#10b981') + '"></i>'
+      + '</div>';
+  }
+
+  function loadToday() {
+    window.call('checkin.list', { date: todayISO(), per_page: 300 }).then(function (data) {
+      if (!$('#ci-list')) return;
+      var items = data.items || [];
+      var cnt = $('#ci-count'); if (cnt) cnt.textContent = items.length + ' คน';
+      // สถิติ
+      var byClass = {};
+      items.forEach(function (it) { var c = it.class_name || 'อื่นๆ'; byClass[c] = (byClass[c] || 0) + 1; });
+      var topClass = Object.keys(byClass).sort(function (a, b) { return byClass[b] - byClass[a]; })[0] || '-';
+      var stats = $('#ci-stats');
+      if (stats) stats.innerHTML =
+        H.statCard({ label: 'เข้าใช้วันนี้', value: items.length, sub: TH.dateWeekday(new Date()), color: 'g-emerald', icon: 'bi-people-fill' })
+        + H.statCard({ label: 'ห้องที่มามากสุด', value: topClass, sub: topClass !== '-' ? byClass[topClass] + ' คน' : '', color: 'g-indigo', icon: 'bi-mortarboard-fill' })
+        + H.statCard({ label: 'ล่าสุด', value: items.length ? TH.time(items[0].checked_at) : '-', sub: items.length ? items[0].user_name : '', color: 'g-sky', icon: 'bi-clock-fill' });
+      // ตาราง
+      if (!items.length) {
+        $('#ci-list').innerHTML = H.emptyState('ยังไม่มีผู้เข้าใช้วันนี้', 'bi-door-open');
+        return;
+      }
+      $('#ci-list').innerHTML = '<div style="overflow-x:auto"><table class="data-table"><thead><tr><th>เวลา</th><th>ชื่อ</th><th>ห้อง</th><th>ช่องทาง</th></tr></thead><tbody>'
+        + items.map(function (it) {
+          return '<tr>'
+            + '<td class="font-mono text-sm">' + esc(TH.time(it.checked_at)) + '</td>'
+            + '<td><div class="flex gap-2 items-center"><div style="width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;' + H.avatarStyle(it.avatar_url) + '">' + (it.avatar_url ? '' : esc(H.initials(it.user_name))) + '</div><div><div class="text-sm font-bold">' + esc(it.user_name) + '</div></div></div></td>'
+            + '<td class="text-sm">' + esc(it.class_name || '-') + '</td>'
+            + '<td>' + (it.source === 'kiosk' ? '<span class="badge b-active"><i class="bi bi-display"></i> คีออส</span>' : '<span class="badge b-borrowed"><i class="bi bi-person-badge"></i> เคาน์เตอร์</span>') + '</td>'
+            + '</tr>';
+        }).join('') + '</tbody></table></div>';
+    }).catch(function (e) {
+      var el = $('#ci-list'); if (el) el.innerHTML = H.emptyState(e.message, 'bi-exclamation-triangle');
+    });
+  }
+
+  // ═════════════════════════════════════════════════════════
+  //  หน้าคีออส (นักเรียนเช็คชื่อเอง — ไม่ต้องล็อกอิน)
+  // ═════════════════════════════════════════════════════════
+  var __KIOSK_TIMER = null;
+  window.SLS_renderKiosk = function () {
+    var bl = document.getElementById('boot-loader'); if (bl) bl.hidden = true;
+    var key = (location.hash.split('key=')[1] || '').split('&')[0];
+    var app = (Store.boot && Store.boot.app) || {};
+    var st = (Store.boot && Store.boot.settings) || {};
+    var libName = st.library_name || app.name || 'ห้องสมุดโรงเรียน';
+    document.title = 'เช็คชื่อ · ' + libName;
+
+    var root = document.getElementById('app-root');
+    root.innerHTML = '<div style="min-height:100vh;background:linear-gradient(135deg,#0f172a 0%,#134e4a 60%,#065f46 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;font-family:Kanit,sans-serif">'
+      + '<div style="width:100%;max-width:560px;background:rgba(255,255,255,.06);backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,.12);border-radius:28px;padding:32px;text-align:center;color:#f1f5f9">'
+      +   '<div style="width:72px;height:72px;margin:0 auto 12px;border-radius:22px;background:linear-gradient(135deg,#10b981,#059669);display:flex;align-items:center;justify-content:center;font-size:36px;color:#fff;box-shadow:0 14px 34px rgba(16,185,129,.45)"><i class="bi bi-person-check-fill"></i></div>'
+      +   '<div style="font-size:24px;font-weight:800">เช็คชื่อเข้าใช้ห้องสมุด</div>'
+      +   '<div style="font-size:13px;color:rgba(241,245,249,.65);margin-bottom:6px">' + esc(libName) + '</div>'
+      +   '<div id="kq-clock" style="font-size:13px;color:#6ee7b7;font-variant-numeric:tabular-nums;margin-bottom:18px">--:--:--</div>'
+      +   '<div style="display:grid;grid-template-columns:auto 1fr;gap:8px;margin-bottom:8px">'
+      +     '<button id="kq-cam" type="button" style="min-width:64px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;border:0;border-radius:16px;font-size:24px;cursor:pointer;box-shadow:0 8px 20px rgba(99,102,241,.4)"><i class="bi bi-qr-code-scan"></i></button>'
+      +     '<input id="kq-code" placeholder="สแกนบัตร หรือกดเลขประจำตัว" autocomplete="off" inputmode="numeric" style="height:64px;border-radius:16px;border:2px solid rgba(255,255,255,.18);background:rgba(255,255,255,.1);color:#fff;font-size:20px;font-weight:700;text-align:center;outline:none;font-family:inherit">'
+      +   '</div>'
+      +   '<button id="kq-go" type="button" style="width:100%;height:58px;border:0;border-radius:16px;background:linear-gradient(135deg,#10b981,#059669);color:#fff;font-family:inherit;font-size:18px;font-weight:800;cursor:pointer;box-shadow:0 10px 26px rgba(16,185,129,.42)"><i class="bi bi-check-circle-fill"></i> เช็คชื่อ</button>'
+      +   '<div id="kq-result" style="margin-top:16px"></div>'
+      + '</div>'
+      + '<div style="margin-top:14px;font-size:11px;color:rgba(241,245,249,.4)">' + esc(app.name || 'SLS') + ' v' + esc(app.version || '') + '</div>'
+      + '</div>';
+
+    // นาฬิกา
+    if (__KIOSK_TIMER) clearInterval(__KIOSK_TIMER);
+    function tick() {
+      var el = document.getElementById('kq-clock');
+      if (!el) { clearInterval(__KIOSK_TIMER); return; }
+      var d = new Date();
+      el.textContent = TH.dateLongWeekday(d) + ' · ' + TH.timeFull(d);
+    }
+    tick();
+    __KIOSK_TIMER = setInterval(tick, 1000);
+
+    var input = document.getElementById('kq-code');
+    var resBox = document.getElementById('kq-result');
+    var busy = false;
+
+    function showResult(html) {
+      resBox.innerHTML = html;
+      setTimeout(function () { if (resBox) resBox.innerHTML = ''; try { input.focus(); } catch (e) {} }, 4500);
+    }
+    function submit() {
+      var code = input.value.trim();
+      if (!code || busy) return;
+      input.value = '';
+      busy = true;
+      resBox.innerHTML = '<div style="padding:14px;color:#6ee7b7"><i class="bi bi-hourglass-split"></i> กำลังบันทึก...</div>';
+      window.call('checkin.kiosk', { key: key, code: code }).then(function (r) {
+        busy = false;
+        var u = r.user || {};
+        beep(r.already ? 'dup' : 'success');
+        if (r.already) {
+          showResult('<div style="padding:18px;background:rgba(245,158,11,.15);border:1px solid rgba(245,158,11,.4);border-radius:16px">'
+            + '<div style="font-size:20px;font-weight:800;color:#fcd34d"><i class="bi bi-info-circle-fill"></i> เช็คชื่อไปแล้ว</div>'
+            + '<div style="font-size:16px;margin-top:6px">' + esc(u.full_name) + ' · ' + esc(u.class_name || '') + '</div>'
+            + '<div style="font-size:13px;color:rgba(241,245,249,.7)">เมื่อ ' + esc(TH.time(r.checked_at)) + '</div></div>');
+        } else {
+          showResult('<div style="padding:18px;background:rgba(16,185,129,.16);border:1px solid rgba(16,185,129,.45);border-radius:16px">'
+            + '<div style="font-size:22px;font-weight:800;color:#6ee7b7"><i class="bi bi-check-circle-fill"></i> ยินดีต้อนรับ!</div>'
+            + '<div style="font-size:18px;font-weight:700;margin-top:6px">' + esc(u.full_name) + '</div>'
+            + '<div style="font-size:13px;color:rgba(241,245,249,.75)">' + esc(u.class_name || '') + ' · ' + esc(TH.time(r.checked_at)) + ' · คนที่ ' + (r.today_count || 1) + ' ของวันนี้</div></div>');
+        }
+      }).catch(function (e) {
+        busy = false;
+        beep('error');
+        showResult('<div style="padding:18px;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.45);border-radius:16px">'
+          + '<div style="font-size:18px;font-weight:800;color:#fca5a5"><i class="bi bi-x-circle-fill"></i> ' + esc(e.message) + '</div>'
+          + '<div style="font-size:12px;color:rgba(241,245,249,.6);margin-top:4px">ลองใหม่ หรือติดต่อบรรณารักษ์</div></div>');
+      });
+    }
+    document.getElementById('kq-go').addEventListener('click', submit);
+    input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+    document.getElementById('kq-cam').addEventListener('click', function () {
+      openCam(function (code) { input.value = code; submit(); });
+    });
+    setTimeout(function () { try { input.focus(); } catch (e) {} }, 200);
+  };
+
+  // ═════════════════════════════════════════════════════════
+  //  บัตรห้องสมุด (Canvas → PNG)
+  // ═════════════════════════════════════════════════════════
+  function qrURL(data, size) {
+    return 'https://api.qrserver.com/v1/create-qr-code/?size=' + size + 'x' + size + '&margin=6&data=' + encodeURIComponent(data);
+  }
+  function loadImg(url) {
+    return new Promise(function (res) {
+      var im = new Image();
+      im.crossOrigin = 'anonymous';
+      im.onload = function () { res(im); };
+      im.onerror = function () { res(null); };
+      im.src = url;
+    });
+  }
+  function rr(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+  // วาดบัตร 1 ใบ (ฐาน 1011×638 px = 8.56×5.4 ซม. @300dpi, s = อัตราย่อ)
+  function drawCard(ctx, ox, oy, s, u, qrImg) {
+    var st = (Store.boot && Store.boot.settings) || {};
+    var app = (Store.boot && Store.boot.app) || {};
+    var lib = st.library_name || app.name || 'ห้องสมุดโรงเรียน';
+    var org = st.org_name || app.org || '';
+    var W = 1011 * s, Hh = 638 * s;
+    ctx.save();
+    // ตัวบัตร
+    rr(ctx, ox, oy, W, Hh, 26 * s);
+    ctx.fillStyle = '#ffffff'; ctx.fill();
+    ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = Math.max(1, 2 * s); ctx.stroke();
+    ctx.clip();
+    // แถบหัว
+    var grad = ctx.createLinearGradient(ox, oy, ox + W, oy);
+    grad.addColorStop(0, '#6366f1'); grad.addColorStop(1, '#8b5cf6');
+    ctx.fillStyle = grad;
+    ctx.fillRect(ox, oy, W, 132 * s);
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    var libFs = 40;
+    ctx.font = '700 ' + (libFs * s) + 'px Kanit, sans-serif';
+    while (ctx.measureText(lib).width > W - 80 * s && libFs > 22) { libFs -= 2; ctx.font = '700 ' + (libFs * s) + 'px Kanit, sans-serif'; }
+    ctx.fillText(lib, ox + 44 * s, oy + 60 * s);
+    ctx.globalAlpha = 0.92;
+    ctx.font = '400 ' + (23 * s) + 'px Kanit, sans-serif';
+    ctx.fillText('บัตรสมาชิกห้องสมุด' + (org ? ' · ' + org : ''), ox + 44 * s, oy + 100 * s);
+    ctx.globalAlpha = 1;
+    // กรอบ QR (ขวา)
+    var q = 300 * s;
+    var qx = ox + W - q - 52 * s, qy = oy + 168 * s;
+    rr(ctx, qx - 14 * s, qy - 14 * s, q + 28 * s, q + 28 * s, 14 * s);
+    ctx.fillStyle = '#ffffff'; ctx.fill();
+    ctx.strokeStyle = '#e2e8f0'; ctx.stroke();
+    if (qrImg) ctx.drawImage(qrImg, qx, qy, q, q);
+    else {
+      ctx.fillStyle = '#f1f5f9'; ctx.fillRect(qx, qy, q, q);
+      ctx.fillStyle = '#94a3b8'; ctx.font = '600 ' + (20 * s) + 'px Kanit, sans-serif';
+      ctx.textAlign = 'center'; ctx.fillText('QR ไม่พร้อม', qx + q / 2, qy + q / 2); ctx.textAlign = 'left';
+    }
+    ctx.fillStyle = '#64748b';
+    ctx.font = '700 ' + (22 * s) + 'px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(u.username || '', qx + q / 2, qy + q + 42 * s);
+    ctx.textAlign = 'left';
+    // ชื่อ (ซ้าย) — ย่อฟอนต์อัตโนมัติถ้ายาว
+    var nameX = ox + 48 * s;
+    var maxW = W - q - 150 * s;
+    var fs = 50;
+    ctx.font = '700 ' + (fs * s) + 'px Kanit, sans-serif';
+    while (ctx.measureText(u.full_name || '').width > maxW && fs > 24) { fs -= 2; ctx.font = '700 ' + (fs * s) + 'px Kanit, sans-serif'; }
+    ctx.fillStyle = '#0f172a';
+    ctx.fillText(u.full_name || '-', nameX, oy + 262 * s);
+    // ห้อง / เลขประจำตัว
+    ctx.font = '500 ' + (30 * s) + 'px Kanit, sans-serif';
+    ctx.fillStyle = '#475569';
+    var line2 = (u.class_name ? 'ชั้น ' + u.class_name : H.roleLabel(u.role)) + (u.student_no ? '  ·  เลขประจำตัว ' + u.student_no : '');
+    while (ctx.measureText(line2).width > maxW && line2.length > 8) { line2 = line2.substring(0, line2.length - 2); }
+    ctx.fillText(line2, nameX, oy + 324 * s);
+    // บทบาท
+    ctx.font = '400 ' + (24 * s) + 'px Kanit, sans-serif';
+    ctx.fillStyle = '#94a3b8';
+    ctx.fillText(H.roleLabel(u.role) || '', nameX, oy + 376 * s);
+    // เส้น + ท้ายบัตร
+    ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = Math.max(1, 2 * s);
+    ctx.beginPath(); ctx.moveTo(ox + 44 * s, oy + Hh - 78 * s); ctx.lineTo(ox + W - 44 * s, oy + Hh - 78 * s); ctx.stroke();
+    ctx.font = '400 ' + (22 * s) + 'px Kanit, sans-serif';
+    ctx.fillStyle = '#94a3b8';
+    ctx.fillText('สแกน QR เพื่อเช็คชื่อเข้าใช้และยืม-คืนหนังสือ', nameX, oy + Hh - 34 * s);
+    ctx.restore();
+  }
+  function fontsReady() {
+    return (document.fonts && document.fonts.ready) ? document.fonts.ready.catch(function () {}) : Promise.resolve();
+  }
+
+  // ── บัตรรายคน ──
+  window.SLS_openCardModal = function (u) {
+    if (!u) return;
+    Modal.open({
+      title: 'บัตรห้องสมุด · ' + u.full_name,
+      titleIcon: 'bi-person-badge-fill',
+      large: true,
+      html: '<div style="text-align:center">'
+        + '<canvas id="cd-cv" width="1011" height="638" style="width:100%;max-width:480px;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.18)"></canvas>'
+        + '<div class="text-xs muted mt-2">ขนาดมาตรฐานบัตร 8.56 × 5.4 ซม. (300dpi) — ปริ้นแล้วเคลือบ/ตัดได้เลย</div>'
+        + '</div>',
+      footer: '<button class="btn" data-modal-close type="button">ปิด</button>'
+        + '<button class="btn btn-primary" id="cd-dl" type="button"><i class="bi bi-download"></i> ดาวน์โหลด PNG</button>',
+      onOpen: function (host) {
+        var cv = host.querySelector('#cd-cv');
+        var ctx = cv.getContext('2d');
+        ctx.fillStyle = '#f8fafc'; ctx.fillRect(0, 0, 1011, 638);
+        ctx.fillStyle = '#94a3b8'; ctx.font = '600 28px Kanit, sans-serif';
+        ctx.textAlign = 'center'; ctx.fillText('กำลังสร้างบัตร...', 505, 330); ctx.textAlign = 'left';
+        Promise.all([loadImg(qrURL('SLS:U:' + u.username, 300)), fontsReady()]).then(function (r) {
+          ctx.clearRect(0, 0, 1011, 638);
+          drawCard(ctx, 0, 0, 1, u, r[0]);
+          host.querySelector('#cd-dl').onclick = function () {
+            try {
+              var a = document.createElement('a');
+              a.download = 'card_' + (u.username || 'user') + '.png';
+              a.href = cv.toDataURL('image/png');
+              a.click();
+            } catch (e) { toast('ดาวน์โหลดไม่สำเร็จ: ' + e.message, 'error'); }
+          };
+        });
+      }
+    });
+  };
+
+  // ── บัตรทั้งชุด (A4 หน้าละ 8 ใบ) ──
+  window.SLS_openCardSheet = function () {
+    Spinner.show('กำลังโหลดรายชื่อ');
+    window.call('user.list', { active_only: true }).then(function (data) {
+      Spinner.hide();
+      var users = data.items || [];
+      var classes = {};
+      users.forEach(function (u) { if (u.class_name) classes[u.class_name] = 1; });
+      var clsOpts = '<option value="">ทุกห้อง</option>' + Object.keys(classes).sort(function (a, b) { return a.localeCompare(b, 'th'); }).map(function (c) {
+        return '<option value="' + esc(c) + '">' + esc(c) + '</option>';
+      }).join('');
+      Modal.open({
+        title: 'พิมพ์บัตรห้องสมุด (ทั้งชุด)',
+        titleIcon: 'bi-printer-fill',
+        large: true,
+        html: '<div class="flex gap-2 mb-3" style="flex-wrap:wrap;align-items:flex-end">'
+          + '<div class="field" style="margin:0;flex:1;min-width:140px"><label>บทบาท</label><select class="select" id="cs-role">'
+          +   '<option value="student" selected>นักเรียน</option><option value="teacher">ครู</option><option value="">ทั้งหมด</option></select></div>'
+          + '<div class="field" style="margin:0;flex:1;min-width:140px"><label>ห้อง</label><select class="select" id="cs-class">' + clsOpts + '</select></div>'
+          + '<button class="btn btn-primary" id="cs-gen" style="height:44px"><i class="bi bi-magic"></i> สร้างบัตร</button>'
+          + '</div>'
+          + '<div class="text-xs muted mb-2">กระดาษ A4 แนวตั้ง หน้าละ 8 ใบ — ปริ้นแบบ "ขนาดจริง 100%" แล้วตัดตามกรอบ</div>'
+          + '<div id="cs-pages"></div>',
+        footer: '<button class="btn" data-modal-close type="button">ปิด</button>',
+        onOpen: function (host) {
+          host.querySelector('#cs-gen').addEventListener('click', function () {
+            var role = host.querySelector('#cs-role').value;
+            var cls = host.querySelector('#cs-class').value;
+            var picked = users.filter(function (u) {
+              if (role && u.role !== role) return false;
+              if (cls && u.class_name !== cls) return false;
+              return true;
+            }).sort(function (a, b) { return String(a.student_no || a.username).localeCompare(String(b.student_no || b.username), 'th'); });
+            if (!picked.length) { toast('ไม่พบสมาชิกตามเงื่อนไข', 'warning'); return; }
+            if (picked.length > 200) { toast('เกิน 200 คน — เลือกทีละห้องจะเร็วกว่า', 'warning'); return; }
+
+            var pagesBox = host.querySelector('#cs-pages');
+            pagesBox.innerHTML = '<div class="text-center muted text-sm" style="padding:20px"><i class="bi bi-hourglass-split"></i> กำลังสร้างบัตร ' + picked.length + ' ใบ (โหลด QR ' + picked.length + ' รูป)...</div>';
+            Spinner.show('กำลังสร้างบัตร ' + picked.length + ' ใบ', { stages: ['โหลด QR Code', 'วาดบัตร', 'จัดหน้า A4'] });
+
+            Promise.all([fontsReady()].concat(picked.map(function (u) {
+              return loadImg(qrURL('SLS:U:' + u.username, 300));
+            }))).then(function (results) {
+              var qrs = results.slice(1);
+              var perPage = 8, cols = 2;
+              var s = 570 / 1011;
+              var cw = 1011 * s, ch = 638 * s;
+              var PW = 1240, PH = 1754;
+              var gx = 24, gy = 26;
+              var mx = (PW - cols * cw - gx) / 2, my = 64;
+              var totalPages = Math.ceil(picked.length / perPage);
+              pagesBox.innerHTML = '';
+
+              var dlAllBar = document.createElement('div');
+              dlAllBar.className = 'flex justify-end mb-3';
+              dlAllBar.innerHTML = '<button class="btn btn-success" id="cs-dl-all"><i class="bi bi-download"></i> ดาวน์โหลดทุกหน้า (' + totalPages + ' ไฟล์)</button>';
+              pagesBox.appendChild(dlAllBar);
+
+              var canvases = [];
+              for (var p = 0; p < totalPages; p++) {
+                var cv = document.createElement('canvas');
+                cv.width = PW; cv.height = PH;
+                cv.style.cssText = 'width:100%;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 4px 14px rgba(0,0,0,.08);margin-bottom:8px';
+                var ctx = cv.getContext('2d');
+                ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, PW, PH);
+                ctx.fillStyle = '#94a3b8'; ctx.font = '600 20px Kanit, sans-serif';
+                ctx.fillText('บัตรสมาชิกห้องสมุด' + (cls ? ' · ' + cls : '') + '  —  หน้า ' + (p + 1) + '/' + totalPages + '  (' + picked.length + ' ใบ)', 44, 40);
+                for (var i = 0; i < perPage; i++) {
+                  var idx = p * perPage + i;
+                  if (idx >= picked.length) break;
+                  var col = i % cols, row = Math.floor(i / cols);
+                  drawCard(ctx, mx + col * (cw + gx), my + row * (ch + gy), s, picked[idx], qrs[idx]);
+                }
+                canvases.push(cv);
+                var wrap = document.createElement('div');
+                wrap.style.marginBottom = '14px';
+                wrap.appendChild(cv);
+                var btn = document.createElement('button');
+                btn.className = 'btn btn-sm';
+                btn.innerHTML = '<i class="bi bi-download"></i> ดาวน์โหลดหน้า ' + (p + 1);
+                (function (canvas, pageNo) {
+                  btn.addEventListener('click', function () {
+                    try {
+                      var a = document.createElement('a');
+                      a.download = 'library_cards_' + (cls || role || 'all') + '_p' + pageNo + '.png';
+                      a.href = canvas.toDataURL('image/png');
+                      a.click();
+                    } catch (e) { toast('ดาวน์โหลดไม่สำเร็จ: ' + e.message, 'error'); }
+                  });
+                })(cv, p + 1);
+                wrap.appendChild(btn);
+                pagesBox.appendChild(wrap);
+              }
+              var dlAll = dlAllBar.querySelector('#cs-dl-all');
+              dlAll.addEventListener('click', function () {
+                canvases.forEach(function (canvas, i) {
+                  setTimeout(function () {
+                    try {
+                      var a = document.createElement('a');
+                      a.download = 'library_cards_' + (cls || role || 'all') + '_p' + (i + 1) + '.png';
+                      a.href = canvas.toDataURL('image/png');
+                      a.click();
+                    } catch (e) {}
+                  }, i * 600);
+                });
+                toast('กำลังดาวน์โหลด ' + canvases.length + ' ไฟล์', 'info');
+              });
+              Spinner.hide();
+              toast('สร้างบัตรเรียบร้อย ' + picked.length + ' ใบ', 'success');
+            }).catch(function (e) {
+              Spinner.hide();
+              toast('สร้างบัตรไม่สำเร็จ: ' + (e && e.message || e), 'error');
+            });
+          });
+        }
+      });
+    }).catch(function (e) { Spinner.hide(); toast(e.message, 'error'); });
+  };
 })();
