@@ -1976,11 +1976,14 @@ var SLS_CONFIG = {
     var userPicker = '';
     if (isStaff) {
       userPicker = '<div class="field bo-user-picker"><label>ผู้ยืม<span class="req">*</span></label>'
-        + '<div style="position:relative">'
-        +   '<input type="text" class="input" id="bo-user-search" placeholder="พิมพ์ชื่อ, username, รหัส..." autocomplete="off">'
-        +   '<input type="hidden" name="user_id" required id="bo-user-id">'
-        +   '<i class="bi bi-search" style="position:absolute; right:12px; top:12px; color:#94a3b8; pointer-events:none;"></i>'
-        +   '<div id="bo-user-dropdown" class="bo-user-dropdown" style="display:none;"></div>'
+        + '<div style="display:flex;gap:8px;align-items:stretch">'
+        +   '<button type="button" class="btn" id="bo-user-scan" title="สแกน QR บัตรนักเรียน" style="min-width:52px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;border-color:transparent;box-shadow:0 4px 12px rgba(99,102,241,.35)"><i class="bi bi-qr-code-scan" style="font-size:18px"></i></button>'
+        +   '<div style="position:relative;flex:1;min-width:0">'
+        +     '<input type="text" class="input" id="bo-user-search" placeholder="สแกนบัตร หรือพิมพ์ชื่อ, username, รหัส..." autocomplete="off">'
+        +     '<input type="hidden" name="user_id" required id="bo-user-id">'
+        +     '<i class="bi bi-search" style="position:absolute; right:12px; top:12px; color:#94a3b8; pointer-events:none;"></i>'
+        +     '<div id="bo-user-dropdown" class="bo-user-dropdown" style="display:none;"></div>'
+        +   '</div>'
         + '</div></div>';
     }
 
@@ -2077,6 +2080,41 @@ var SLS_CONFIG = {
               dropdown.style.display = 'none';
             }
           }, { capture: true });
+
+          // สแกน QR บัตรนักเรียน → เลือกผู้ยืมอัตโนมัติ
+          var scanBtn = $('#bo-user-scan', host);
+          if (scanBtn) scanBtn.addEventListener('click', function () {
+            if (!window.SLS_openCamOverlay) return toast('ตัวสแกนยังไม่พร้อม', 'warning');
+            window.SLS_openCamOverlay(function (text) {
+              var code = String(text).replace(/^SLS:U:/i, '').trim();
+              if (!code) return;
+              searchInput.value = code;
+              dropdown.innerHTML = '<div style="padding:12px;text-align:center;color:#64748b;font-size:13px"><i class="bi bi-hourglass-split"></i> กำลังค้นหาจากบัตร...</div>';
+              dropdown.style.display = 'block';
+              window.call('user.list', { q: code, active_only: true }).then(function (data) {
+                var items = data.items || [];
+                var lc = code.toLowerCase();
+                var exact = items.filter(function (x) {
+                  return String(x.username).toLowerCase() === lc || String(x.student_no) === code;
+                });
+                var u = exact[0] || (items.length === 1 ? items[0] : null);
+                if (u) {
+                  searchInput.value = u.full_name;
+                  idInput.value = u.id;
+                  dropdown.style.display = 'none';
+                  toast('เลือก ' + u.full_name + (u.class_name ? ' (' + u.class_name + ')' : '') + ' แล้ว', 'success', 2200);
+                } else if (items.length) {
+                  renderUserList(items);
+                } else {
+                  dropdown.style.display = 'none';
+                  toast('ไม่พบสมาชิกจากบัตรนี้', 'error');
+                }
+              }).catch(function (e) {
+                dropdown.style.display = 'none';
+                toast(e.message, 'error');
+              });
+            });
+          });
         }
         $('#bo-submit', host).addEventListener('click', function () {
           var data = { book_id: b.id, days: parseInt(f.days.value, 10) || defaultDays, notes: f.notes.value };
@@ -3935,7 +3973,24 @@ var SLS_CONFIG = {
         +   '</div>'
         + '</div>'
         + '<div class="flex justify-end gap-2"><button type="button" class="btn btn-primary btn-lg" id="st-save"><i class="bi bi-save"></i> บันทึกการตั้งค่า</button></div>'
-        + '</form>';
+        + '</form>'
+        + '<div class="sd-panel" style="margin-top:16px;border:1px solid #fecaca;background:linear-gradient(135deg,#fff5f5,#fff)">'
+        +   '<div class="sd-panel-title" style="color:#b91c1c"><i class="bi bi-exclamation-octagon-fill"></i> โซนอันตราย · ล้างข้อมูลเริ่มปีการศึกษาใหม่</div>'
+        +   '<div class="text-xs muted mb-3">ลบ<b>ถาวร</b> กู้คืนไม่ได้ — หนังสือ หมวดหมู่ ช่องทางชำระ การตั้งค่า และบัญชีครู/บรรณารักษ์/ผู้ดูแล <b>จะไม่ถูกลบ</b> · แนะนำให้สำเนาไฟล์ Google Sheets เก็บไว้ก่อน (เปิดไฟล์ → File → Make a copy)</div>'
+        +   '<div class="flex-col gap-2 mb-3" style="font-size:13px">'
+        +     '<label class="lf-check" style="display:flex;color:#475569"><input type="checkbox" class="wipe-cb" value="loans" checked><span class="lf-check-box"></span><span>รายการยืมทั้งหมด <span class="muted">(คืนสต๊อกหนังสือเต็มจำนวนให้อัตโนมัติ)</span></span></label>'
+        +     '<label class="lf-check" style="display:flex;color:#475569"><input type="checkbox" class="wipe-cb" value="fines" checked><span class="lf-check-box"></span><span>ค่าปรับทั้งหมด</span></label>'
+        +     '<label class="lf-check" style="display:flex;color:#475569"><input type="checkbox" class="wipe-cb" value="reservations" checked><span class="lf-check-box"></span><span>การจองทั้งหมด</span></label>'
+        +     '<label class="lf-check" style="display:flex;color:#475569"><input type="checkbox" class="wipe-cb" value="checkins" checked><span class="lf-check-box"></span><span>ประวัติเช็คชื่อเข้าใช้ทั้งหมด</span></label>'
+        +     '<label class="lf-check" style="display:flex;color:#475569"><input type="checkbox" class="wipe-cb" value="audit"><span class="lf-check-box"></span><span>Audit log ทั้งหมด</span></label>'
+        +     '<label class="lf-check" style="display:flex;color:#475569"><input type="checkbox" class="wipe-cb" value="book_stats"><span class="lf-check-box"></span><span>รีเซ็ตสถิติยอดยืมหนังสือ (นับหนังสือยอดนิยมใหม่)</span></label>'
+        +     '<label class="lf-check" style="display:flex;color:#b91c1c"><input type="checkbox" class="wipe-cb" value="students"><span class="lf-check-box"></span><span><b>ลบบัญชีนักเรียนทั้งหมด</b> (เตรียมนำเข้ารุ่นใหม่ — บัตรเดิมจะใช้ไม่ได้)</span></label>'
+        +   '</div>'
+        +   '<div class="flex gap-2" style="flex-wrap:wrap;align-items:center">'
+        +     '<input class="input" id="st-wipe-confirm" placeholder="พิมพ์คำว่า: ลบข้อมูล" style="max-width:220px" autocomplete="off">'
+        +     '<button type="button" class="btn btn-danger" id="st-wipe"><i class="bi bi-trash3-fill"></i> ล้างข้อมูลที่เลือก</button>'
+        +   '</div>'
+        + '</div>';
       H.pageWrap(html);
       $('#st-save').addEventListener('click', function () {
         var f = $('#st-form');
@@ -3952,6 +4007,25 @@ var SLS_CONFIG = {
           });
           alertSuccess('บันทึกแล้ว');
         }).catch(function (e) { Spinner.hide(); alertError('ไม่สำเร็จ', e.message); });
+      });
+      $('#st-wipe').addEventListener('click', function () {
+        var targets = $$('.wipe-cb').filter(function (c) { return c.checked; }).map(function (c) { return c.value; });
+        if (!targets.length) return toast('เลือกข้อมูลที่จะลบอย่างน้อย 1 รายการ', 'warning');
+        if ($('#st-wipe-confirm').value.trim() !== 'ลบข้อมูล') return toast('พิมพ์คำว่า "ลบข้อมูล" ในช่องยืนยันก่อน', 'warning');
+        var names = { loans: 'รายการยืม', fines: 'ค่าปรับ', reservations: 'การจอง', checkins: 'เช็คชื่อ', audit: 'Audit log', book_stats: 'สถิติยอดยืม', students: 'บัญชีนักเรียนทั้งหมด' };
+        confirmModal({
+          title: 'ยืนยันลบถาวร?',
+          message: 'จะลบ: ' + targets.map(function (t) { return names[t] || t; }).join(' · ') + ' — กู้คืนไม่ได้!',
+          danger: true, okText: 'ลบถาวร', icon: 'warning'
+        }).then(function (ok) {
+          if (!ok) return;
+          Spinner.show('กำลังล้างข้อมูล', { stages: ['ลบข้อมูล', 'คืนสต๊อกหนังสือ', 'ล้างแคช', 'เสร็จสิ้น'] });
+          window.call('admin.clear_data', { targets: targets, confirm: 'ลบข้อมูล' }, 180000).then(function (r) {
+            Spinner.hide();
+            alertSuccess('ล้างข้อมูลเรียบร้อย', 'ลบแล้ว ' + ((r.cleared || []).length) + ' กลุ่มข้อมูล — พร้อมเริ่มปีการศึกษาใหม่');
+            Routes['#/settings']();
+          }).catch(function (e) { Spinner.hide(); alertError('ล้างข้อมูลไม่สำเร็จ', e.message); });
+        });
       });
     }).catch(function (e) { toast(e.message, 'error'); });
   };
@@ -4142,6 +4216,46 @@ var SLS_CONFIG = {
       if (oc) oc();
     };
   }
+
+  // สแกนกล้องแบบ overlay — ใช้ซ้อนบน Modal อื่นได้ (เช่น modal ยืมหนังสือ)
+  window.SLS_openCamOverlay = function (onCode) {
+    var old = document.getElementById('sls-cam-overlay');
+    if (old) old.remove();
+    var elemId = 'cam-ov-' + Date.now();
+    var ov = document.createElement('div');
+    ov.id = 'sls-cam-overlay';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(15,23,42,.85);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:20px';
+    ov.innerHTML = '<div style="width:100%;max-width:400px;background:#fff;border-radius:18px;padding:16px;font-family:Kanit,sans-serif;box-shadow:0 24px 60px rgba(0,0,0,.4)">'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
+      +   '<b style="font-size:15px;color:#1e293b"><i class="bi bi-qr-code-scan" style="color:#6366f1"></i> สแกนบัตรนักเรียน</b>'
+      +   '<button type="button" id="cam-ov-close" style="border:0;background:#f1f5f9;width:34px;height:34px;border-radius:9px;cursor:pointer;font-size:14px"><i class="bi bi-x-lg"></i></button>'
+      + '</div>'
+      + '<div id="' + elemId + '" style="width:100%;aspect-ratio:1;background:#0f172a;border-radius:12px;overflow:hidden"></div>'
+      + '<div style="font-size:11px;color:#64748b;text-align:center;margin-top:8px">หันกล้องไปที่ QR Code บนบัตรสมาชิก</div>'
+      + '</div>';
+    document.body.appendChild(ov);
+    var scanner = null;
+    function cleanup() {
+      if (scanner) { try { scanner.stop().then(function () { scanner.clear(); }).catch(function () {}); } catch (e) {} scanner = null; }
+      if (ov.parentNode) ov.parentNode.removeChild(ov);
+    }
+    ov.querySelector('#cam-ov-close').addEventListener('click', cleanup);
+    ov.addEventListener('click', function (e) { if (e.target === ov) cleanup(); });
+    loadScanner().then(function (HQ) {
+      if (!document.getElementById(elemId)) return;
+      scanner = new HQ(elemId);
+      scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 220, height: 220 } },
+        function (text) { var cb = onCode; cleanup(); if (cb) cb(text); },
+        function () {}
+      ).catch(function (e) {
+        var el = document.getElementById(elemId);
+        if (el) el.innerHTML = '<div style="color:#fca5a5;padding:36px;text-align:center"><i class="bi bi-camera-video-off" style="font-size:32px"></i><br>เปิดกล้องไม่ได้<br><span style="font-size:11px">' + esc(e.message || '') + '</span></div>';
+      });
+    }).catch(function () {
+      var el = document.getElementById(elemId);
+      if (el) el.innerHTML = '<div style="color:#fca5a5;padding:36px;text-align:center">โหลดตัวสแกนไม่สำเร็จ — พิมพ์รหัสในช่องแทนได้</div>';
+    });
+  };
 
   // ═════════════════════════════════════════════════════════
   //  หน้าเช็คชื่อ (สำหรับบรรณารักษ์)
