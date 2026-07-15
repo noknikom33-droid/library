@@ -4499,8 +4499,17 @@ var SLS_CONFIG = {
     ctx.arcTo(x, y, x + w, y, r);
     ctx.closePath();
   }
-  // วาดบัตร 1 ใบ (ฐาน 1011×638 px = 8.56×5.4 ซม. @300dpi, s = อัตราย่อ)
-  function drawCard(ctx, ox, oy, s, u, qrImg) {
+  // วาดรูปแบบ cover-fit (ครอบเต็มกรอบ ตัดขอบเกินตรงกลาง)
+  function drawCover_(ctx, img, x, y, w, h) {
+    var iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+    if (!iw || !ih) return;
+    var scale = Math.max(w / iw, h / ih);
+    var sw = w / scale, sh = h / scale;
+    var sx = (iw - sw) / 2, sy = (ih - sh) / 2;
+    ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
+  }
+  // วาดบัตร 1 ใบ (ฐาน 1011×638 px = 8.56×5.4 ซม. @300dpi, s = อัตราย่อ) — มีรูปนักเรียน
+  function drawCard(ctx, ox, oy, s, u, qrImg, avImg) {
     var st = (Store.boot && Store.boot.settings) || {};
     var app = (Store.boot && Store.boot.app) || {};
     var lib = st.library_name || app.name || 'ห้องสมุดโรงเรียน';
@@ -4527,12 +4536,39 @@ var SLS_CONFIG = {
     ctx.font = '400 ' + (23 * s) + 'px Kanit, sans-serif';
     ctx.fillText('บัตรสมาชิกห้องสมุด' + (org ? ' · ' + org : ''), ox + 44 * s, oy + 100 * s);
     ctx.globalAlpha = 1;
-    // กรอบ QR (ขวา)
-    var q = 300 * s;
-    var qx = ox + W - q - 52 * s, qy = oy + 168 * s;
+    // ── รูปนักเรียน (ซ้าย) ──
+    var pw = 200 * s, ph = 250 * s, px = ox + 44 * s, py = oy + 168 * s;
+    ctx.save();
+    rr(ctx, px, py, pw, ph, 16 * s);
+    ctx.fillStyle = '#eef2ff'; ctx.fill();
+    ctx.clip();
+    var drewPhoto = false;
+    if (avImg) {
+      try { drawCover_(ctx, avImg, px, py, pw, ph); drewPhoto = true; } catch (e) {}
+    }
+    if (!drewPhoto) {
+      var g2 = ctx.createLinearGradient(px, py, px + pw, py + ph);
+      g2.addColorStop(0, '#818cf8'); g2.addColorStop(1, '#a78bfa');
+      ctx.fillStyle = g2; ctx.fillRect(px, py, pw, ph);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '800 ' + (72 * s) + 'px Kanit, sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(H.initials(u.full_name), px + pw / 2, py + ph / 2 - 14 * s);
+      ctx.font = '500 ' + (20 * s) + 'px Kanit, sans-serif';
+      ctx.globalAlpha = 0.85;
+      ctx.fillText('ไม่มีรูป', px + pw / 2, py + ph / 2 + 50 * s);
+      ctx.globalAlpha = 1;
+      ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    }
+    ctx.restore();
+    rr(ctx, px, py, pw, ph, 16 * s);
+    ctx.strokeStyle = '#c7d2fe'; ctx.lineWidth = Math.max(1, 3 * s); ctx.stroke();
+    // ── QR (ขวา) ──
+    var q = 264 * s;
+    var qx = ox + W - q - 48 * s, qy = oy + 172 * s;
     rr(ctx, qx - 14 * s, qy - 14 * s, q + 28 * s, q + 28 * s, 14 * s);
     ctx.fillStyle = '#ffffff'; ctx.fill();
-    ctx.strokeStyle = '#e2e8f0'; ctx.stroke();
+    ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = Math.max(1, 2 * s); ctx.stroke();
     if (qrImg) ctx.drawImage(qrImg, qx, qy, q, q);
     else {
       ctx.fillStyle = '#f1f5f9'; ctx.fillRect(qx, qy, q, q);
@@ -4540,34 +4576,39 @@ var SLS_CONFIG = {
       ctx.textAlign = 'center'; ctx.fillText('QR ไม่พร้อม', qx + q / 2, qy + q / 2); ctx.textAlign = 'left';
     }
     ctx.fillStyle = '#64748b';
-    ctx.font = '700 ' + (22 * s) + 'px monospace';
+    ctx.font = '700 ' + (20 * s) + 'px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(u.username || '', qx + q / 2, qy + q + 42 * s);
+    ctx.fillText(u.username || '', qx + q / 2, qy + q + 38 * s);
     ctx.textAlign = 'left';
-    // ชื่อ (ซ้าย) — ย่อฟอนต์อัตโนมัติถ้ายาว
-    var nameX = ox + 48 * s;
-    var maxW = W - q - 150 * s;
-    var fs = 50;
+    // ── ชื่อ (กลาง ระหว่างรูปกับ QR) ──
+    var nameX = px + pw + 30 * s;
+    var maxW = (qx - 16 * s) - 20 * s - nameX;
+    var fs = 46;
     ctx.font = '700 ' + (fs * s) + 'px Kanit, sans-serif';
-    while (ctx.measureText(u.full_name || '').width > maxW && fs > 24) { fs -= 2; ctx.font = '700 ' + (fs * s) + 'px Kanit, sans-serif'; }
+    while (ctx.measureText(u.full_name || '').width > maxW && fs > 22) { fs -= 2; ctx.font = '700 ' + (fs * s) + 'px Kanit, sans-serif'; }
     ctx.fillStyle = '#0f172a';
-    ctx.fillText(u.full_name || '-', nameX, oy + 262 * s);
-    // ห้อง / เลขประจำตัว
-    ctx.font = '500 ' + (30 * s) + 'px Kanit, sans-serif';
+    ctx.fillText(u.full_name || '-', nameX, oy + 248 * s);
+    // ห้อง / เลขประจำตัว (2 บรรทัดถ้ายาว)
+    ctx.font = '500 ' + (27 * s) + 'px Kanit, sans-serif';
     ctx.fillStyle = '#475569';
-    var line2 = (u.class_name ? 'ชั้น ' + u.class_name : H.roleLabel(u.role)) + (u.student_no ? '  ·  เลขประจำตัว ' + u.student_no : '');
-    while (ctx.measureText(line2).width > maxW && line2.length > 8) { line2 = line2.substring(0, line2.length - 2); }
-    ctx.fillText(line2, nameX, oy + 324 * s);
+    var l2a = u.class_name ? 'ชั้น ' + u.class_name : H.roleLabel(u.role);
+    var l2b = u.student_no ? 'เลขประจำตัว ' + u.student_no : '';
+    if (l2b && ctx.measureText(l2a + '  ·  ' + l2b).width <= maxW) {
+      ctx.fillText(l2a + '  ·  ' + l2b, nameX, oy + 306 * s);
+    } else {
+      ctx.fillText(l2a, nameX, oy + 302 * s);
+      if (l2b) ctx.fillText(l2b, nameX, oy + 344 * s);
+    }
     // บทบาท
-    ctx.font = '400 ' + (24 * s) + 'px Kanit, sans-serif';
+    ctx.font = '400 ' + (22 * s) + 'px Kanit, sans-serif';
     ctx.fillStyle = '#94a3b8';
-    ctx.fillText(H.roleLabel(u.role) || '', nameX, oy + 376 * s);
+    ctx.fillText(H.roleLabel(u.role) || '', nameX, oy + 392 * s);
     // เส้น + ท้ายบัตร
     ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = Math.max(1, 2 * s);
     ctx.beginPath(); ctx.moveTo(ox + 44 * s, oy + Hh - 78 * s); ctx.lineTo(ox + W - 44 * s, oy + Hh - 78 * s); ctx.stroke();
     ctx.font = '400 ' + (22 * s) + 'px Kanit, sans-serif';
     ctx.fillStyle = '#94a3b8';
-    ctx.fillText('สแกน QR เพื่อเช็คชื่อเข้าใช้และยืม-คืนหนังสือ', nameX, oy + Hh - 34 * s);
+    ctx.fillText('สแกน QR เพื่อเช็คชื่อเข้าใช้และยืม-คืนหนังสือ', ox + 44 * s, oy + Hh - 34 * s);
     ctx.restore();
   }
   function fontsReady() {
@@ -4593,9 +4634,13 @@ var SLS_CONFIG = {
         ctx.fillStyle = '#f8fafc'; ctx.fillRect(0, 0, 1011, 638);
         ctx.fillStyle = '#94a3b8'; ctx.font = '600 28px Kanit, sans-serif';
         ctx.textAlign = 'center'; ctx.fillText('กำลังสร้างบัตร...', 505, 330); ctx.textAlign = 'left';
-        Promise.all([loadImg(qrURL('SLS:U:' + u.username, 300)), fontsReady()]).then(function (r) {
+        Promise.all([
+          loadImg(qrURL('SLS:U:' + u.username, 300)),
+          u.avatar_url ? loadImg(u.avatar_url) : Promise.resolve(null),
+          fontsReady()
+        ]).then(function (r) {
           ctx.clearRect(0, 0, 1011, 638);
-          drawCard(ctx, 0, 0, 1, u, r[0]);
+          drawCard(ctx, 0, 0, 1, u, r[0], r[1]);
           host.querySelector('#cd-dl').onclick = function () {
             try {
               var a = document.createElement('a');
@@ -4646,13 +4691,16 @@ var SLS_CONFIG = {
             if (picked.length > 200) { toast('เกิน 200 คน — เลือกทีละห้องจะเร็วกว่า', 'warning'); return; }
 
             var pagesBox = host.querySelector('#cs-pages');
-            pagesBox.innerHTML = '<div class="text-center muted text-sm" style="padding:20px"><i class="bi bi-hourglass-split"></i> กำลังสร้างบัตร ' + picked.length + ' ใบ (โหลด QR ' + picked.length + ' รูป)...</div>';
+            pagesBox.innerHTML = '<div class="text-center muted text-sm" style="padding:20px"><i class="bi bi-hourglass-split"></i> กำลังสร้างบัตร ' + picked.length + ' ใบ (โหลด QR + รูปนักเรียน)...</div>';
             Spinner.show('กำลังสร้างบัตร ' + picked.length + ' ใบ', { stages: ['โหลด QR Code', 'วาดบัตร', 'จัดหน้า A4'] });
 
             Promise.all([fontsReady()].concat(picked.map(function (u) {
-              return loadImg(qrURL('SLS:U:' + u.username, 300));
+              return Promise.all([
+                loadImg(qrURL('SLS:U:' + u.username, 300)),
+                u.avatar_url ? loadImg(u.avatar_url) : Promise.resolve(null)
+              ]);
             }))).then(function (results) {
-              var qrs = results.slice(1);
+              var imgs = results.slice(1);
               var perPage = 8, cols = 2;
               var s = 570 / 1011;
               var cw = 1011 * s, ch = 638 * s;
@@ -4680,7 +4728,7 @@ var SLS_CONFIG = {
                   var idx = p * perPage + i;
                   if (idx >= picked.length) break;
                   var col = i % cols, row = Math.floor(i / cols);
-                  drawCard(ctx, mx + col * (cw + gx), my + row * (ch + gy), s, picked[idx], qrs[idx]);
+                  drawCard(ctx, mx + col * (cw + gx), my + row * (ch + gy), s, picked[idx], imgs[idx][0], imgs[idx][1]);
                 }
                 canvases.push(cv);
                 var wrap = document.createElement('div');
